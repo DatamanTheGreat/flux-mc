@@ -1,0 +1,6 @@
+# Build outputs
+build/
+.gradle/
+
+# Encrypted credential keystore (contains Vultr API key)
+credentials.p12

@@ -6,6 +6,18 @@
 [vultr]
 # Your Vultr API key (required)
 # Get this from: https://my.vultr.com/settings/#settingsapi
+#
+# SECURE STORAGE (recommended): Set the environment variable instead of editing
+# this file, so the key is never written to disk in plaintext:
+#
+#   export FLUXMC_VULTR_API_KEY="your-key-here"
+#
+# If you paste your key below, FluxMc will automatically migrate it into an
+# encrypted keystore (credentials.p12) on first startup and replace this value
+# with the placeholder. You can optionally protect the keystore with a custom
+# password via the FLUXMC_KEYSTORE_PASSWORD environment variable.
+#
+# Resolution order:  env var  >  encrypted keystore  >  this file
 api_key = "YOUR_VULTR_API_KEY_HERE"
 
 # Vultr region code (required)
