@@ -244,18 +244,22 @@ public class ServerManager {
     }
 
     /**
-     * Execute API call and return raw response
+     * Execute API call and return raw response.
+     *
+     * The Authorization header is passed to curl via stdin (using --config -)
+     * rather than as a command-line argument, so the API key is not visible
+     * in process listings (ps, /proc/*/cmdline).
      */
     private String executeApiCallRaw(String method, String endpoint, String jsonPayload) {
         try {
             List<String> command = new ArrayList<>();
             command.add("curl");
             command.add("-s");
+            command.add("--config");
+            command.add("-");       // read config (containing auth header) from stdin
             command.add("-X");
             command.add(method);
             command.add("https://api.vultr.com" + endpoint);
-            command.add("-H");
-            command.add("Authorization: Bearer " + Config.VULTR_API_KEY);
 
             if (jsonPayload != null) {
                 command.add("-H");
@@ -265,6 +269,15 @@ public class ServerManager {
             }
 
             Process process = new ProcessBuilder(command).start();
+
+            // Write the auth header through stdin so it never appears in the
+            // process argument list.  curl --config format: header = "Name: Value"
+            try (var stdin = process.getOutputStream()) {
+                String configLine = "header = \"Authorization: Bearer "
+                        + Config.VULTR_API_KEY + "\"\n";
+                stdin.write(configLine.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                stdin.flush();
+            }
 
             StringBuilder response = new StringBuilder();
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {

@@ -8,8 +8,13 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 public class Config {
+    // Environment variable names for secure key resolution
+    private static final String ENV_API_KEY = "FLUXMC_VULTR_API_KEY";
+    private static final String PLACEHOLDER_API_KEY = "YOUR_VULTR_API_KEY_HERE";
+
     // Vultr API Configuration
     public static String VULTR_API_KEY;
     public static String VULTR_REGION;
@@ -67,8 +72,7 @@ public class Config {
         try {
             Toml toml = new Toml().read(configFile);
 
-            // Vultr settings
-            VULTR_API_KEY = toml.getString("vultr.api_key");
+            // Vultr settings (API key resolved separately below)
             VULTR_REGION = toml.getString("vultr.region");
             VULTR_PLAN = toml.getString("vultr.plan");
             VULTR_OS_ID = toml.getLong("vultr.os_id").intValue();
@@ -94,9 +98,10 @@ public class Config {
             KICK_MESSAGE = toml.getString("server.kick_message",
                     "Server is starting! Please reconnect in 30 seconds.");
 
-            // Validate required settings
-            if (VULTR_API_KEY == null || VULTR_API_KEY.isEmpty() || VULTR_API_KEY.equals("YOUR_VULTR_API_KEY_HERE")) {
-                logger.error("VULTR_API_KEY is not configured! Please edit config.toml");
+            // --- Secure API key resolution ---
+            // Priority: environment variable > encrypted keystore > config file (plaintext)
+            VULTR_API_KEY = resolveApiKey(toml, dataDirectory, logger);
+            if (VULTR_API_KEY == null) {
                 return false;
             }
 
@@ -123,6 +128,75 @@ public class Config {
         } catch (Exception e) {
             logger.error("Failed to load config file", e);
             return false;
+        }
+    }
+
+    /**
+     * Resolve the Vultr API key from multiple sources, in priority order:
+     *   1. Environment variable  FLUXMC_VULTR_API_KEY
+     *   2. Encrypted PKCS12 keystore  (credentials.p12)
+     *   3. Plaintext value in config.toml  (auto-migrated to keystore on first load)
+     *
+     * If the key is found in the config file (plaintext), it is automatically
+     * migrated into the encrypted keystore and replaced with a placeholder so
+     * the secret no longer sits in a human-readable file.
+     */
+    private static String resolveApiKey(Toml toml, Path dataDirectory, Logger logger) {
+        // 1. Environment variable — highest priority, most secure
+        String envKey = System.getenv(ENV_API_KEY);
+        if (envKey != null && !envKey.isBlank()) {
+            logger.info("Vultr API key loaded from environment variable {}", ENV_API_KEY);
+            return envKey;
+        }
+
+        // 2. Encrypted keystore
+        SecureKeyStorage keyStorage = new SecureKeyStorage(dataDirectory, logger);
+        String storedKey = keyStorage.retrieveApiKey();
+        if (storedKey != null && !storedKey.isBlank()) {
+            logger.info("Vultr API key loaded from encrypted keystore");
+            return storedKey;
+        }
+
+        // 3. Plaintext config file — fallback with auto-migration
+        String configKey = toml.getString("vultr.api_key");
+        if (configKey == null || configKey.isBlank() || configKey.equals(PLACEHOLDER_API_KEY)) {
+            logger.error("VULTR_API_KEY is not configured!");
+            logger.error("Set the environment variable {} or edit config.toml", ENV_API_KEY);
+            return null;
+        }
+
+        // Key exists in plaintext — migrate it to the encrypted keystore
+        logger.warn("API key found in plaintext config file — migrating to encrypted keystore...");
+        if (keyStorage.storeApiKey(configKey)) {
+            // Replace the plaintext key in config.toml with a migration notice
+            removePlaintextKey(dataDirectory, logger);
+            logger.info("Migration complete. The plaintext key has been removed from config.toml.");
+        } else {
+            logger.warn("Could not migrate API key to keystore. "
+                    + "Falling back to plaintext config (not recommended).");
+        }
+
+        return configKey;
+    }
+
+    /**
+     * Replace the plaintext api_key value in config.toml with the placeholder,
+     * so the secret no longer resides in a human-readable file.
+     */
+    private static void removePlaintextKey(Path dataDirectory, Logger logger) {
+        Path configPath = dataDirectory.resolve("config.toml");
+        try {
+            List<String> lines = Files.readAllLines(configPath);
+            for (int i = 0; i < lines.size(); i++) {
+                String trimmed = lines.get(i).trim();
+                if (trimmed.startsWith("api_key") && trimmed.contains("=")) {
+                    lines.set(i, "api_key = \"" + PLACEHOLDER_API_KEY + "\"");
+                    break;
+                }
+            }
+            Files.write(configPath, lines);
+        } catch (IOException e) {
+            logger.warn("Could not update config.toml to remove plaintext key", e);
         }
     }
 }
